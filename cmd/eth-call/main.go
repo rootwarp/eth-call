@@ -2,10 +2,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v2"
@@ -13,8 +15,15 @@ import (
 	internalabi "github.com/rootwarp/eth-call/internal/abi"
 	"github.com/rootwarp/eth-call/internal/converter"
 	"github.com/rootwarp/eth-call/internal/encoder"
+	"github.com/rootwarp/eth-call/internal/rpc"
 	"github.com/rootwarp/eth-call/internal/txbuilder"
 )
+
+// dialFn is the function used to connect to an RPC endpoint.
+// Override in tests to inject a mock client.
+var dialFn = func(ctx context.Context, url string) (rpc.Client, error) {
+	return rpc.Dial(ctx, url)
+}
 
 func buildApp() *cli.App {
 	return &cli.App{
@@ -35,6 +44,10 @@ func buildApp() *cli.App {
 			addr := c.String("to")
 			if addr != "" && !common.IsHexAddress(addr) {
 				return fmt.Errorf("invalid address: %s (expected 0x-prefixed 40-character hex)", addr)
+			}
+			fromAddr := c.String("from")
+			if fromAddr != "" && !common.IsHexAddress(fromAddr) {
+				return fmt.Errorf("invalid --from address: %s (expected 0x-prefixed 40-character hex)", fromAddr)
 			}
 			return nil
 		},
@@ -62,6 +75,10 @@ func buildApp() *cli.App {
 			&cli.BoolFlag{
 				Name:  "calldata-only",
 				Usage: "output only the ABI-encoded calldata",
+			},
+			&cli.StringFlag{
+				Name:  "from",
+				Usage: "sender address for RPC calls (0x-prefixed hex)",
 			},
 			&cli.StringFlag{
 				Name:    "rpc",
@@ -114,7 +131,13 @@ func buildApp() *cli.App {
 				return nil
 			}
 
-			// 6b. Encode calldata
+			// 6b. Validate --rpc requires --from
+			rpcURL := c.String("rpc")
+			if rpcURL != "" && c.String("from") == "" {
+				return fmt.Errorf("--from is required when --rpc is provided")
+			}
+
+			// 6c. Encode calldata
 			calldata, err := encoder.Encode(parsedABI, method, args)
 			if err != nil {
 				return err
@@ -126,12 +149,35 @@ func buildApp() *cli.App {
 				return err
 			}
 
-			// 8. Build transaction
+			// 8. Build base params from CLI flags
 			params := txbuilder.TxParams{
 				ChainID: big.NewInt(c.Int64("chain-id")),
 				Value:   value,
 			}
 
+			// 9. If --rpc is set, fetch params from RPC and merge
+			if rpcURL != "" {
+				fromAddr := common.HexToAddress(c.String("from"))
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				client, dialErr := dialFn(ctx, rpcURL)
+				if dialErr != nil {
+					return dialErr
+				}
+				defer client.Close()
+
+				rpcParams, fetchErr := client.FetchParams(ctx, fromAddr, toAddr, calldata, value)
+				if fetchErr != nil {
+					return fetchErr
+				}
+
+				// Merge: CLI flags take precedence over RPC values
+				params = mergeParams(c, rpcParams, value)
+			}
+
+			// 10. Build transaction
 			txHex, err := txbuilder.Build(calldata, toAddr, params)
 			if err != nil {
 				return err
@@ -156,6 +202,21 @@ func parseValue(s string) (*big.Int, error) {
 		return nil, fmt.Errorf("invalid --value: %q (expected decimal or 0x-prefixed hex integer)", s)
 	}
 	return v, nil
+}
+
+// mergeParams merges RPC-fetched params with CLI-specified overrides.
+// CLI flags take precedence when explicitly set by the user.
+func mergeParams(c *cli.Context, rpcParams txbuilder.TxParams, cliValue *big.Int) txbuilder.TxParams {
+	params := rpcParams
+
+	if c.IsSet("chain-id") {
+		params.ChainID = big.NewInt(c.Int64("chain-id"))
+	}
+	if c.IsSet("value") {
+		params.Value = cliValue
+	}
+
+	return params
 }
 
 func main() {
