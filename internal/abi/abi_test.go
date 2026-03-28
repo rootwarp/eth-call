@@ -1,34 +1,60 @@
 package abi
 
 import (
+	"strings"
 	"testing"
-
-	ethabi "github.com/ethereum/go-ethereum/accounts/abi"
 )
 
-func TestLoadFromFile_ReturnsNotImplemented(t *testing.T) {
-	_, err := LoadFromFile("test.json")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+func TestLoadFromFile_ValidABI(t *testing.T) {
+	parsed, err := LoadFromFile("../../test/data/erc20.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "not implemented" {
-		t.Fatalf("expected 'not implemented', got %q", err.Error())
+
+	// Verify methods map is non-empty
+	if len(parsed.Methods) == 0 {
+		t.Fatal("expected non-empty methods map")
+	}
+
+	// Verify known ERC-20 methods exist
+	expectedMethods := []string{"transfer", "approve", "balanceOf", "allowance", "totalSupply"}
+	for _, name := range expectedMethods {
+		if _, ok := parsed.Methods[name]; !ok {
+			t.Errorf("expected method %q in parsed ABI", name)
+		}
 	}
 }
 
-func TestFindMethod_ReturnsNotImplemented(t *testing.T) {
-	_, err := FindMethod(ethabi.ABI{}, "transfer")
+func TestLoadFromFile_FileNotFound(t *testing.T) {
+	_, err := LoadFromFile("nonexistent.json")
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected error for missing file, got nil")
 	}
-	if err.Error() != "not implemented" {
-		t.Fatalf("expected 'not implemented', got %q", err.Error())
+
+	// Error must contain the file path
+	if !strings.Contains(err.Error(), "nonexistent.json") {
+		t.Errorf("error should contain file path, got: %v", err)
+	}
+
+	// Error must use the abi: prefix
+	if !strings.HasPrefix(err.Error(), "abi:") {
+		t.Errorf("error should start with 'abi:', got: %v", err)
 	}
 }
 
-func TestListMethods_ReturnsNil(t *testing.T) {
-	result := ListMethods(ethabi.ABI{})
-	if result != nil {
-		t.Fatalf("expected nil, got %v", result)
+func TestLoadFromFile_InvalidJSON(t *testing.T) {
+	_, err := LoadFromFile("../../test/data/invalid.json")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+
+	// Error must use the abi: prefix
+	if !strings.HasPrefix(err.Error(), "abi:") {
+		t.Errorf("error should start with 'abi:', got: %v", err)
+	}
+
+	// Error must mention invalid JSON ABI
+	if !strings.Contains(err.Error(), "invalid JSON ABI") {
+		t.Errorf("error should contain 'invalid JSON ABI', got: %v", err)
 	}
 }
