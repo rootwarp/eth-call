@@ -3,10 +3,17 @@ package main
 
 import (
 	"fmt"
+	"math/big"
 	"os"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v2"
+
+	internalabi "github.com/rootwarp/eth-call/internal/abi"
+	"github.com/rootwarp/eth-call/internal/converter"
+	"github.com/rootwarp/eth-call/internal/encoder"
+	"github.com/rootwarp/eth-call/internal/txbuilder"
 )
 
 func buildApp() *cli.App {
@@ -63,10 +70,92 @@ func buildApp() *cli.App {
 			},
 		},
 		Action: func(c *cli.Context) error {
-			_ = c
-			return fmt.Errorf("not implemented")
+			// 1. Parse flags
+			abiPath := c.Path("abi")
+			toAddr := common.HexToAddress(c.String("to"))
+			method := c.Args().First()
+			rawArgs := c.Args().Tail()
+
+			// 2. Load ABI
+			parsedABI, err := internalabi.LoadFromFile(abiPath)
+			if err != nil {
+				return err
+			}
+
+			// 3. If no method name, list available methods and exit
+			if method == "" {
+				methods := internalabi.ListMethods(parsedABI)
+				_, _ = fmt.Fprintln(c.App.ErrWriter, "Available methods:")
+				for _, m := range methods {
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "  %s\n", m)
+				}
+				return nil
+			}
+
+			// 4. Look up method
+			methodDef, err := internalabi.FindMethod(parsedABI, method)
+			if err != nil {
+				return err
+			}
+
+			// 5. Convert arguments
+			args, err := converter.ConvertArgs(rawArgs, methodDef.Inputs)
+			if err != nil {
+				return err
+			}
+
+			// 6a. Calldata-only mode
+			if c.Bool("calldata-only") {
+				calldataHex, encErr := encoder.EncodeToHex(parsedABI, method, args)
+				if encErr != nil {
+					return encErr
+				}
+				_, _ = fmt.Fprintln(c.App.Writer, calldataHex)
+				return nil
+			}
+
+			// 6b. Encode calldata
+			calldata, err := encoder.Encode(parsedABI, method, args)
+			if err != nil {
+				return err
+			}
+
+			// 7. Parse --value
+			value, err := parseValue(c.String("value"))
+			if err != nil {
+				return err
+			}
+
+			// 8. Build transaction
+			params := txbuilder.TxParams{
+				ChainID: big.NewInt(c.Int64("chain-id")),
+				Value:   value,
+			}
+
+			txHex, err := txbuilder.Build(calldata, toAddr, params)
+			if err != nil {
+				return err
+			}
+
+			_, _ = fmt.Fprintln(c.App.Writer, txHex)
+			return nil
 		},
 	}
+}
+
+// parseValue converts a decimal or 0x-prefixed hex string to *big.Int.
+func parseValue(s string) (*big.Int, error) {
+	v := new(big.Int)
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		if _, ok := v.SetString(s[2:], 16); !ok {
+			return nil, fmt.Errorf("invalid --value: %q (expected decimal or 0x-prefixed hex integer)", s)
+		}
+		return v, nil
+	}
+	if _, ok := v.SetString(s, 10); !ok {
+		return nil, fmt.Errorf("invalid --value: %q (expected decimal or 0x-prefixed hex integer)", s)
+	}
+	return v, nil
 }
 
 func main() {
