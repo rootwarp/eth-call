@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ethabi "github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // makeType is a test helper that creates an ethabi.Type with the given T value.
@@ -137,8 +138,6 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 		name string
 		typ  byte
 	}{
-		{"BoolTy", ethabi.BoolTy},
-		{"AddressTy", ethabi.AddressTy},
 		{"BytesTy", ethabi.BytesTy},
 		{"FixedBytesTy", ethabi.FixedBytesTy},
 		{"SliceTy", ethabi.SliceTy},
@@ -154,6 +153,105 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "not implemented") {
 				t.Fatalf("expected 'not implemented' error for %s, got %q", tt.name, err.Error())
+			}
+		})
+	}
+}
+
+// --- Address tests ---
+
+func TestConvertArg_Address(t *testing.T) {
+	typ := makeType(ethabi.AddressTy)
+
+	t.Run("valid", func(t *testing.T) {
+		result, err := ConvertArg("0xdAC17F958D2ee523a2206206994597C13D831ec7", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		addr, ok := result.(common.Address)
+		if !ok {
+			t.Fatalf("expected common.Address, got %T", result)
+		}
+		want := common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+		if addr != want {
+			t.Fatalf("expected %s, got %s", want.Hex(), addr.Hex())
+		}
+	})
+
+	t.Run("zero_address", func(t *testing.T) {
+		result, err := ConvertArg("0x0000000000000000000000000000000000000000", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		addr, ok := result.(common.Address)
+		if !ok {
+			t.Fatalf("expected common.Address, got %T", result)
+		}
+		if addr != (common.Address{}) {
+			t.Fatalf("expected zero address, got %s", addr.Hex())
+		}
+	})
+
+	t.Run("invalid_hex", func(t *testing.T) {
+		_, err := ConvertArg("0xZZZ", typ)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid address") {
+			t.Fatalf("expected invalid address error, got %q", err.Error())
+		}
+	})
+
+	t.Run("short_input", func(t *testing.T) {
+		_, err := ConvertArg("0x1234", typ)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid address") {
+			t.Fatalf("expected invalid address error, got %q", err.Error())
+		}
+	})
+}
+
+// --- Bool tests ---
+
+func TestConvertArg_Bool(t *testing.T) {
+	typ := makeType(ethabi.BoolTy)
+
+	tests := []struct {
+		name    string
+		input   string
+		want    bool
+		wantErr bool
+	}{
+		{"true", "true", true, false},
+		{"false", "false", false, false},
+		{"one", "1", true, false},
+		{"zero", "0", false, false},
+		{"yes_invalid", "yes", false, true},
+		{"two_invalid", "2", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ConvertArg(tt.input, typ)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "invalid bool") {
+					t.Fatalf("expected invalid bool error, got %q", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			v, ok := result.(bool)
+			if !ok {
+				t.Fatalf("expected bool, got %T", result)
+			}
+			if v != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, v)
 			}
 		})
 	}

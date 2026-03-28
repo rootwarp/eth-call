@@ -3,8 +3,10 @@ package converter
 
 import (
 	"fmt"
+	"strconv"
 
 	ethabi "github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // ConvertArgs converts a slice of string arguments to Go types matching
@@ -37,9 +39,16 @@ func ConvertArg(value string, typ ethabi.Type) (interface{}, error) {
 	case ethabi.IntTy:
 		return convertInt(value, typ.Size)
 	case ethabi.BoolTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid bool: %q (expected true, false, 1, or 0)", value)
+		}
+		return b, nil
 	case ethabi.AddressTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		if !common.IsHexAddress(value) {
+			return nil, fmt.Errorf("invalid address: %q (expected 0x-prefixed 40-character hex string)", value)
+		}
+		return common.HexToAddress(value), nil
 	case ethabi.BytesTy:
 		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
 	case ethabi.FixedBytesTy:
