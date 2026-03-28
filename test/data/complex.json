@@ -1,0 +1,71 @@
+[
+  {
+    "type": "function",
+    "name": "processTuple",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "components": [
+          {"name": "amount", "type": "uint256"},
+          {"name": "recipient", "type": "address"}
+        ]
+      }
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "batchTransfer",
+    "inputs": [
+      {"name": "amounts", "type": "uint256[]"},
+      {"name": "recipient", "type": "address"}
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "swapPair",
+    "inputs": [
+      {"name": "tokens", "type": "address[2]"},
+      {"name": "amount", "type": "uint256"}
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "processNested",
+    "inputs": [
+      {
+        "name": "data",
+        "type": "tuple",
+        "components": [
+          {"name": "id", "type": "uint256"},
+          {
+            "name": "detail",
+            "type": "tuple",
+            "components": [
+              {"name": "sender", "type": "address"},
+              {"name": "flag", "type": "bool"}
+            ]
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "storeHash",
+    "inputs": [
+      {"name": "hash", "type": "bytes32"},
+      {"name": "data", "type": "bytes"}
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  }
+]
