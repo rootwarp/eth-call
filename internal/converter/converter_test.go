@@ -138,8 +138,6 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 		name string
 		typ  byte
 	}{
-		{"BytesTy", ethabi.BytesTy},
-		{"FixedBytesTy", ethabi.FixedBytesTy},
 		{"SliceTy", ethabi.SliceTy},
 		{"ArrayTy", ethabi.ArrayTy},
 		{"TupleTy", ethabi.TupleTy},
@@ -155,6 +153,219 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 				t.Fatalf("expected 'not implemented' error for %s, got %q", tt.name, err.Error())
 			}
 		})
+	}
+}
+
+// --- Dynamic bytes tests ---
+
+func TestConvertArg_Bytes(t *testing.T) {
+	typ := makeType(ethabi.BytesTy)
+
+	t.Run("valid_hex", func(t *testing.T) {
+		result, err := ConvertArg("0xdeadbeef", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		b, ok := result.([]byte)
+		if !ok {
+			t.Fatalf("expected []byte, got %T", result)
+		}
+		if len(b) != 4 {
+			t.Fatalf("expected 4 bytes, got %d", len(b))
+		}
+		if b[0] != 0xde || b[1] != 0xad || b[2] != 0xbe || b[3] != 0xef {
+			t.Fatalf("expected deadbeef, got %x", b)
+		}
+	})
+
+	t.Run("empty_0x", func(t *testing.T) {
+		result, err := ConvertArg("0x", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		b, ok := result.([]byte)
+		if !ok {
+			t.Fatalf("expected []byte, got %T", result)
+		}
+		if len(b) != 0 {
+			t.Fatalf("expected empty bytes, got %d bytes", len(b))
+		}
+	})
+
+	t.Run("no_prefix", func(t *testing.T) {
+		result, err := ConvertArg("abcd", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		b, ok := result.([]byte)
+		if !ok {
+			t.Fatalf("expected []byte, got %T", result)
+		}
+		if len(b) != 2 || b[0] != 0xab || b[1] != 0xcd {
+			t.Fatalf("expected abcd, got %x", b)
+		}
+	})
+
+	t.Run("odd_length", func(t *testing.T) {
+		_, err := ConvertArg("0xabc", typ)
+		if err == nil {
+			t.Fatal("expected error for odd-length hex, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid bytes") {
+			t.Fatalf("expected 'invalid bytes' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("invalid_hex", func(t *testing.T) {
+		_, err := ConvertArg("0xZZZZ", typ)
+		if err == nil {
+			t.Fatal("expected error for invalid hex, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid bytes") {
+			t.Fatalf("expected 'invalid bytes' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("empty_string", func(t *testing.T) {
+		result, err := ConvertArg("", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		b, ok := result.([]byte)
+		if !ok {
+			t.Fatalf("expected []byte, got %T", result)
+		}
+		if len(b) != 0 {
+			t.Fatalf("expected empty bytes, got %d bytes", len(b))
+		}
+	})
+}
+
+// --- Fixed bytes tests ---
+
+func TestConvertArg_Bytes1(t *testing.T) {
+	typ := makeIntType(ethabi.FixedBytesTy, 1)
+
+	t.Run("valid", func(t *testing.T) {
+		result, err := ConvertArg("0xab", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		arr, ok := result.([1]byte)
+		if !ok {
+			t.Fatalf("expected [1]byte, got %T", result)
+		}
+		if arr[0] != 0xab {
+			t.Fatalf("expected 0xab, got 0x%x", arr[0])
+		}
+	})
+
+	t.Run("too_long", func(t *testing.T) {
+		_, err := ConvertArg("0xabcd", typ)
+		if err == nil {
+			t.Fatal("expected error for too-long input, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid bytes1") {
+			t.Fatalf("expected 'invalid bytes1' error, got %q", err.Error())
+		}
+	})
+}
+
+func TestConvertArg_Bytes4(t *testing.T) {
+	typ := makeIntType(ethabi.FixedBytesTy, 4)
+
+	t.Run("function_selector", func(t *testing.T) {
+		result, err := ConvertArg("0xa9059cbb", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		arr, ok := result.([4]byte)
+		if !ok {
+			t.Fatalf("expected [4]byte, got %T", result)
+		}
+		expected := [4]byte{0xa9, 0x05, 0x9c, 0xbb}
+		if arr != expected {
+			t.Fatalf("expected %x, got %x", expected, arr)
+		}
+	})
+}
+
+func TestConvertArg_Bytes32(t *testing.T) {
+	typ := makeIntType(ethabi.FixedBytesTy, 32)
+
+	t.Run("full_32_bytes", func(t *testing.T) {
+		input := "0x" + strings.Repeat("ab", 32)
+		result, err := ConvertArg(input, typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		arr, ok := result.([32]byte)
+		if !ok {
+			t.Fatalf("expected [32]byte, got %T", result)
+		}
+		for i := 0; i < 32; i++ {
+			if arr[i] != 0xab {
+				t.Fatalf("byte %d: expected 0xab, got 0x%x", i, arr[i])
+			}
+		}
+	})
+
+	t.Run("shorter_input_left_padded", func(t *testing.T) {
+		result, err := ConvertArg("0xab", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		arr, ok := result.([32]byte)
+		if !ok {
+			t.Fatalf("expected [32]byte, got %T", result)
+		}
+		if arr[0] != 0xab {
+			t.Fatalf("expected first byte 0xab, got 0x%x", arr[0])
+		}
+		for i := 1; i < 32; i++ {
+			if arr[i] != 0 {
+				t.Fatalf("byte %d: expected 0x00, got 0x%x", i, arr[i])
+			}
+		}
+	})
+
+	t.Run("too_long_33_bytes", func(t *testing.T) {
+		input := "0x" + strings.Repeat("ab", 33)
+		_, err := ConvertArg(input, typ)
+		if err == nil {
+			t.Fatal("expected error for 33 bytes in bytes32, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid bytes32") {
+			t.Fatalf("expected 'invalid bytes32' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("invalid_hex", func(t *testing.T) {
+		_, err := ConvertArg("0xZZZZ", typ)
+		if err == nil {
+			t.Fatal("expected error for invalid hex, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid bytes32") {
+			t.Fatalf("expected 'invalid bytes32' error, got %q", err.Error())
+		}
+	})
+}
+
+func TestConvertArg_Bytes20(t *testing.T) {
+	typ := makeIntType(ethabi.FixedBytesTy, 20)
+
+	result, err := ConvertArg("0x"+strings.Repeat("ff", 20), typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr, ok := result.([20]byte)
+	if !ok {
+		t.Fatalf("expected [20]byte, got %T", result)
+	}
+	for i := 0; i < 20; i++ {
+		if arr[i] != 0xff {
+			t.Fatalf("byte %d: expected 0xff, got 0x%x", i, arr[i])
+		}
 	}
 }
 

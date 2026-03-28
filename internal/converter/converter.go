@@ -50,9 +50,9 @@ func ConvertArg(value string, typ ethabi.Type) (interface{}, error) {
 		}
 		return common.HexToAddress(value), nil
 	case ethabi.BytesTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertBytes(value)
 	case ethabi.FixedBytesTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertFixedBytes(value, typ.Size)
 	case ethabi.SliceTy:
 		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
 	case ethabi.ArrayTy:
