@@ -470,3 +470,145 @@ func TestAction_EmptyCalldata(t *testing.T) {
 		t.Fatalf("expected output starting with 0x02, got %q", output)
 	}
 }
+
+// --- Uniswap V2 CLI integration tests ---
+
+func TestAction_UniswapSwap_CalldataOnly(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/uniswap_v2.json",
+		"--to", "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+		"--calldata-only",
+		"swapExactTokensForTokens",
+		"1000",
+		"1",
+		`["0x0000000000000000000000000000000000000001","0x0000000000000000000000000000000000000002"]`,
+		"0x0000000000000000000000000000000000000003",
+		"9999",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "0x38ed1739") {
+		t.Errorf("expected calldata starting with 0x38ed1739, got %q", output[:14])
+	}
+}
+
+func TestAction_UniswapSwap_FullTx(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/uniswap_v2.json",
+		"--to", "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+		"swapExactTokensForTokens",
+		"1000",
+		"1",
+		`["0x0000000000000000000000000000000000000001","0x0000000000000000000000000000000000000002"]`,
+		"0x0000000000000000000000000000000000000003",
+		"9999",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "0x02") {
+		t.Fatalf("expected output starting with 0x02 (DynamicFeeTx), got %q", output)
+	}
+}
+
+func TestAction_UniswapAddLiquidity_CalldataOnly(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/uniswap_v2.json",
+		"--to", "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+		"--calldata-only",
+		"addLiquidity",
+		"0x0000000000000000000000000000000000000001",
+		"0x0000000000000000000000000000000000000002",
+		"100",
+		"200",
+		"50",
+		"100",
+		"0x0000000000000000000000000000000000000003",
+		"9999",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "0xe8e33700") {
+		t.Errorf("expected calldata starting with 0xe8e33700, got %q", output[:14])
+	}
+}
+
+func TestAction_UniswapGetAmountsOut_CalldataOnly(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/uniswap_v2.json",
+		"--to", "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+		"--calldata-only",
+		"getAmountsOut",
+		"1000",
+		`["0x0000000000000000000000000000000000000001","0x0000000000000000000000000000000000000002"]`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "0xd06ca61f") {
+		t.Errorf("expected calldata starting with 0xd06ca61f, got %q", output[:14])
+	}
+}
+
+func TestAction_UniswapMaxUint256_CalldataOnly(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	maxUint256 := "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/uniswap_v2.json",
+		"--to", "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+		"--calldata-only",
+		"getAmountsOut",
+		maxUint256,
+		`["0x0000000000000000000000000000000000000001"]`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	// Verify selector
+	if !strings.HasPrefix(output, "0xd06ca61f") {
+		t.Errorf("expected calldata starting with 0xd06ca61f, got %q", output[:14])
+	}
+	// Verify max uint256 is encoded as all f's (chars 10-74 after "0x" prefix and 8-char selector)
+	amountIn := output[10:74]
+	expectedMax := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	if amountIn != expectedMax {
+		t.Errorf("max uint256 encoding mismatch\nexpected: %s\ngot:      %s", expectedMax, amountIn)
+	}
+}

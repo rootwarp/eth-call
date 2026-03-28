@@ -242,6 +242,133 @@ func TestEncodeToHex_Error(t *testing.T) {
 	}
 }
 
+// --- Complex type encoder tests ---
+
+func loadUniswapV2ABI(t *testing.T) ethabi.ABI {
+	t.Helper()
+	parsed, err := ethabi.JSON(strings.NewReader(uniswapV2ABI))
+	if err != nil {
+		t.Fatalf("failed to parse Uniswap V2 ABI: %v", err)
+	}
+	return parsed
+}
+
+func TestEncode_DynamicAddressSlice(t *testing.T) {
+	parsed := loadUniswapV2ABI(t)
+
+	path := []common.Address{
+		common.HexToAddress("0x0000000000000000000000000000000000000001"),
+		common.HexToAddress("0x0000000000000000000000000000000000000002"),
+	}
+	args := []interface{}{
+		big.NewInt(1000),
+		path,
+	}
+
+	calldata, err := Encode(parsed, "getAmountsOut", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotSelector := hex.EncodeToString(calldata[:4])
+	if gotSelector != "d06ca61f" {
+		t.Errorf("expected selector d06ca61f, got %s", gotSelector)
+	}
+}
+
+func TestEncode_MixedStaticAndDynamic(t *testing.T) {
+	parsed := loadUniswapV2ABI(t)
+
+	path := []common.Address{
+		common.HexToAddress("0x0000000000000000000000000000000000000001"),
+		common.HexToAddress("0x0000000000000000000000000000000000000002"),
+	}
+	args := []interface{}{
+		big.NewInt(1000), // amountIn
+		big.NewInt(500),  // amountOutMin
+		path,             // path (dynamic)
+		common.HexToAddress("0x0000000000000000000000000000000000000003"), // to
+		big.NewInt(9999), // deadline
+	}
+
+	calldata, err := Encode(parsed, "swapExactTokensForTokens", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotSelector := hex.EncodeToString(calldata[:4])
+	if gotSelector != "38ed1739" {
+		t.Errorf("expected selector 38ed1739, got %s", gotSelector)
+	}
+
+	// Verify amountIn = 1000 = 0x3e8
+	gotHex := hex.EncodeToString(calldata)
+	amountIn := gotHex[8:72]
+	expected := "00000000000000000000000000000000000000000000000000000000000003e8"
+	if amountIn != expected {
+		t.Errorf("amountIn mismatch: expected %s, got %s", expected, amountIn)
+	}
+}
+
+func TestEncode_MaxUint256(t *testing.T) {
+	parsed := loadUniswapV2ABI(t)
+
+	maxUint256 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	path := []common.Address{
+		common.HexToAddress("0x0000000000000000000000000000000000000001"),
+	}
+	args := []interface{}{maxUint256, path}
+
+	calldata, err := Encode(parsed, "getAmountsOut", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotHex := hex.EncodeToString(calldata)
+	amountIn := gotHex[8:72]
+	expectedMax := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	if amountIn != expectedMax {
+		t.Errorf("max uint256 mismatch: expected %s, got %s", expectedMax, amountIn)
+	}
+}
+
+func TestEncode_EightParams(t *testing.T) {
+	parsed := loadUniswapV2ABI(t)
+
+	args := []interface{}{
+		common.HexToAddress("0x0000000000000000000000000000000000000001"), // tokenA
+		common.HexToAddress("0x0000000000000000000000000000000000000002"), // tokenB
+		big.NewInt(100), // amountADesired
+		big.NewInt(200), // amountBDesired
+		big.NewInt(50),  // amountAMin
+		big.NewInt(100), // amountBMin
+		common.HexToAddress("0x0000000000000000000000000000000000000003"), // to
+		big.NewInt(9999), // deadline
+	}
+
+	calldata, err := Encode(parsed, "addLiquidity", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotSelector := hex.EncodeToString(calldata[:4])
+	if gotSelector != "e8e33700" {
+		t.Errorf("expected selector e8e33700, got %s", gotSelector)
+	}
+
+	// 8 static params: selector(4) + 8*32 = 260
+	if len(calldata) != 260 {
+		t.Errorf("expected 260 bytes, got %d", len(calldata))
+	}
+}
+
+// Inline Uniswap V2 Router ABI subset for encoder tests
+const uniswapV2ABI = `[
+  {"type":"function","name":"swapExactTokensForTokens","inputs":[{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"path","type":"address[]"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"outputs":[{"name":"amounts","type":"uint256[]"}],"stateMutability":"nonpayable"},
+  {"type":"function","name":"addLiquidity","inputs":[{"name":"tokenA","type":"address"},{"name":"tokenB","type":"address"},{"name":"amountADesired","type":"uint256"},{"name":"amountBDesired","type":"uint256"},{"name":"amountAMin","type":"uint256"},{"name":"amountBMin","type":"uint256"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"outputs":[{"name":"amountA","type":"uint256"},{"name":"amountB","type":"uint256"},{"name":"liquidity","type":"uint256"}],"stateMutability":"nonpayable"},
+  {"type":"function","name":"getAmountsOut","inputs":[{"name":"amountIn","type":"uint256"},{"name":"path","type":"address[]"}],"outputs":[{"name":"amounts","type":"uint256[]"}],"stateMutability":"view"}
+]`
+
 // Inline ERC-20 ABI for tests (avoids file-path dependency)
 const erc20ABI = `[
   {"constant":true,"inputs":[],"name":"name","outputs":[{"name":"","type":"string"}],"type":"function","stateMutability":"view"},
