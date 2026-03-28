@@ -1,3 +1,4 @@
+// Package main is the entrypoint for the eth-call CLI tool.
 package main
 
 import (
