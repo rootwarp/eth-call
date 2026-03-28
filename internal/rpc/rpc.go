@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"os"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -28,5 +29,5 @@ func Dial(ctx context.Context, url string) (Client, error) {
 		return nil, fmt.Errorf("rpc: failed to connect: %w", err)
 	}
 
-	return &ethClient{backend: &realBackend{client: client}}, nil
+	return &ethClient{backend: &realBackend{client: client}, warnWriter: os.Stderr}, nil
 }

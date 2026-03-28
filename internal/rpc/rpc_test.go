@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"strings"
@@ -14,6 +15,11 @@ import (
 // TestClientInterfaceCompliance verifies that ethClient implements Client.
 func TestClientInterfaceCompliance(_ *testing.T) {
 	var _ Client = (*ethClient)(nil)
+}
+
+// TestMockClientInterfaceCompliance verifies that MockClient implements Client.
+func TestMockClientInterfaceCompliance(_ *testing.T) {
+	var _ Client = (*MockClient)(nil)
 }
 
 // TestDialInvalidURL verifies Dial returns an error for invalid URLs.
@@ -124,23 +130,27 @@ func TestApplyGasMargin(t *testing.T) {
 	}
 }
 
-// TestFetchParamsPopulatesTxParams verifies that FetchParams returns a correctly populated TxParams.
-func TestFetchParamsPopulatesTxParams(t *testing.T) {
+// --- FetchParams tests with graceful degradation ---
+
+// TestFetchParamsAllSucceed verifies FetchParams returns fully populated TxParams when all RPC calls succeed.
+func TestFetchParamsAllSucceed(t *testing.T) {
 	baseFee := big.NewInt(10_000_000_000)
 	gasTipCap := big.NewInt(1_000_000_000)
 	expectedFeeCap := big.NewInt(21_000_000_000)
 	estimatedGas := uint64(50000)
 	expectedGas := uint64(60000) // 50000 * 120 / 100
 
-	mock := &mockBackend{
-		chainID:     big.NewInt(1),
-		nonce:       42,
-		gasTipCap:   gasTipCap,
-		baseFee:     baseFee,
-		gasEstimate: estimatedGas,
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:     big.NewInt(1),
+			nonce:       42,
+			gasTipCap:   gasTipCap,
+			baseFee:     baseFee,
+			gasEstimate: estimatedGas,
+		},
+		warnWriter: &warnBuf,
 	}
-
-	ec := &ethClient{backend: mock}
 
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -162,42 +172,60 @@ func TestFetchParamsPopulatesTxParams(t *testing.T) {
 		t.Fatalf("expected gas limit %d, got %d", expectedGas, params.GasLimit)
 	}
 	assertBigInt(t, "Value", params.Value, value)
+
+	if warnBuf.Len() != 0 {
+		t.Fatalf("expected no warnings, got: %s", warnBuf.String())
+	}
 }
 
-// TestFetchParamsChainIDError verifies error wrapping when ChainID fails.
-func TestFetchParamsChainIDError(t *testing.T) {
-	mock := &mockBackend{
-		chainIDErr: errMock("chain id unavailable"),
+// TestFetchParamsChainIDDegrades verifies ChainID failure produces warning + nil default.
+func TestFetchParamsChainIDDegrades(t *testing.T) {
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainIDErr:  errMock("chain id unavailable"),
+			nonce:       1,
+			gasTipCap:   big.NewInt(1_000_000_000),
+			baseFee:     big.NewInt(10_000_000_000),
+			gasEstimate: 21000,
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
-	_, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error on degraded chain ID, got: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "rpc: failed to fetch chain ID") {
-		t.Fatalf("expected error containing %q, got %q", "rpc: failed to fetch chain ID", err.Error())
+	if params.ChainID != nil {
+		t.Fatalf("expected nil ChainID on degradation, got %s", params.ChainID)
+	}
+
+	if !strings.Contains(warnBuf.String(), "chain ID") {
+		t.Fatalf("expected warning about chain ID, got: %s", warnBuf.String())
 	}
 }
 
-// TestFetchParamsNonceError verifies error wrapping when nonce fetch fails.
+// TestFetchParamsNonceError verifies nonce failure is NOT degradable — always a hard error.
 func TestFetchParamsNonceError(t *testing.T) {
-	mock := &mockBackend{
-		chainID:  big.NewInt(1),
-		nonceErr: errMock("nonce unavailable"),
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:  big.NewInt(1),
+			nonceErr: errMock("nonce unavailable"),
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
 	_, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected error for nonce failure, got nil")
 	}
 
 	if !strings.Contains(err.Error(), "rpc: failed to fetch nonce") {
@@ -205,88 +233,230 @@ func TestFetchParamsNonceError(t *testing.T) {
 	}
 }
 
-// TestFetchParamsGasTipCapError verifies error wrapping when gas tip cap fetch fails.
-func TestFetchParamsGasTipCapError(t *testing.T) {
-	mock := &mockBackend{
-		chainID:      big.NewInt(1),
-		nonce:        1,
-		gasTipCapErr: errMock("tip cap unavailable"),
+// TestFetchParamsGasTipCapDegrades verifies gas tip cap failure produces warning + zero default.
+func TestFetchParamsGasTipCapDegrades(t *testing.T) {
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:      big.NewInt(1),
+			nonce:        1,
+			gasTipCapErr: errMock("tip cap unavailable"),
+			baseFee:      big.NewInt(10_000_000_000),
+			gasEstimate:  21000,
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
-	_, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error on degraded gas tip cap, got: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "rpc: failed to fetch gas tip cap") {
-		t.Fatalf("expected error containing %q, got %q", "rpc: failed to fetch gas tip cap", err.Error())
+	assertBigInt(t, "GasTipCap", params.GasTipCap, big.NewInt(0))
+	// GasFeeCap = 2*baseFee + 0 = 20 gwei
+	assertBigInt(t, "GasFeeCap", params.GasFeeCap, big.NewInt(20_000_000_000))
+
+	if !strings.Contains(warnBuf.String(), "gas tip cap") {
+		t.Fatalf("expected warning about gas tip cap, got: %s", warnBuf.String())
 	}
 }
 
-// TestFetchParamsHeaderError verifies error wrapping when header fetch fails.
-func TestFetchParamsHeaderError(t *testing.T) {
-	mock := &mockBackend{
-		chainID:   big.NewInt(1),
-		nonce:     1,
-		gasTipCap: big.NewInt(1_000_000_000),
-		headerErr: errMock("header unavailable"),
+// TestFetchParamsHeaderDegrades verifies header failure produces warning + zero gas fee cap.
+func TestFetchParamsHeaderDegrades(t *testing.T) {
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:     big.NewInt(1),
+			nonce:       1,
+			gasTipCap:   big.NewInt(1_000_000_000),
+			headerErr:   errMock("header unavailable"),
+			gasEstimate: 21000,
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
-	_, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error on degraded header, got: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "rpc: failed to fetch base fee") {
-		t.Fatalf("expected error containing %q, got %q", "rpc: failed to fetch base fee", err.Error())
+	assertBigInt(t, "GasFeeCap", params.GasFeeCap, big.NewInt(0))
+	assertBigInt(t, "GasTipCap", params.GasTipCap, big.NewInt(1_000_000_000))
+
+	if !strings.Contains(warnBuf.String(), "base fee") {
+		t.Fatalf("expected warning about base fee, got: %s", warnBuf.String())
 	}
 }
 
-// TestFetchParamsEstimateGasError verifies error wrapping when gas estimation fails.
-func TestFetchParamsEstimateGasError(t *testing.T) {
-	mock := &mockBackend{
-		chainID:        big.NewInt(1),
-		nonce:          1,
-		gasTipCap:      big.NewInt(1_000_000_000),
-		baseFee:        big.NewInt(10_000_000_000),
-		gasEstimateErr: errMock("gas estimation failed"),
+// TestFetchParamsEstimateGasDegrades verifies gas estimation failure produces warning + zero default.
+func TestFetchParamsEstimateGasDegrades(t *testing.T) {
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:        big.NewInt(1),
+			nonce:          1,
+			gasTipCap:      big.NewInt(1_000_000_000),
+			baseFee:        big.NewInt(10_000_000_000),
+			gasEstimateErr: errMock("gas estimation failed"),
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
-	_, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error on degraded gas estimate, got: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "rpc: failed to estimate gas") {
-		t.Fatalf("expected error containing %q, got %q", "rpc: failed to estimate gas", err.Error())
+	if params.GasLimit != 0 {
+		t.Fatalf("expected gas limit 0, got %d", params.GasLimit)
+	}
+
+	if !strings.Contains(warnBuf.String(), "estimate gas") {
+		t.Fatalf("expected warning about gas estimation, got: %s", warnBuf.String())
 	}
 }
 
-// TestFetchParamsReturnsCorrectValuePassthrough verifies the value is passed through to TxParams.
-func TestFetchParamsReturnsCorrectValuePassthrough(t *testing.T) {
+// TestFetchParamsEstimateGasRevert verifies revert reason is extracted from EstimateGas failure.
+func TestFetchParamsEstimateGasRevert(t *testing.T) {
+	revertErr := newRevertError("insufficient balance")
+
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:        big.NewInt(1),
+			nonce:          1,
+			gasTipCap:      big.NewInt(1_000_000_000),
+			baseFee:        big.NewInt(10_000_000_000),
+			gasEstimateErr: revertErr,
+		},
+		warnWriter: &warnBuf,
+	}
+
+	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error on degraded gas estimate with revert, got: %v", err)
+	}
+
+	if params.GasLimit != 0 {
+		t.Fatalf("expected gas limit 0, got %d", params.GasLimit)
+	}
+
+	warnStr := warnBuf.String()
+	if !strings.Contains(warnStr, "insufficient balance") {
+		t.Fatalf("expected warning to contain revert reason, got: %s", warnStr)
+	}
+}
+
+// TestFetchParamsEstimateGasRevertBadData verifies that invalid revert data falls back to generic warning.
+func TestFetchParamsEstimateGasRevertBadData(t *testing.T) {
+	// An error with ErrorData() but invalid ABI encoding
+	badRevert := &revertError{
+		reason:  "bad",
+		hexData: "0xdead", // too short to be valid ABI
+	}
+
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:        big.NewInt(1),
+			nonce:          1,
+			gasTipCap:      big.NewInt(1_000_000_000),
+			baseFee:        big.NewInt(10_000_000_000),
+			gasEstimateErr: badRevert,
+		},
+		warnWriter: &warnBuf,
+	}
+
+	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if params.GasLimit != 0 {
+		t.Fatalf("expected gas limit 0, got %d", params.GasLimit)
+	}
+
+	// Should fall back to generic warning (not revert reason)
+	warnStr := warnBuf.String()
+	if !strings.Contains(warnStr, "estimate gas") {
+		t.Fatalf("expected warning about gas estimation, got: %s", warnStr)
+	}
+	if strings.Contains(warnStr, "contract reverted") {
+		t.Fatalf("did not expect revert reason in warning for bad data, got: %s", warnStr)
+	}
+}
+
+// TestFetchParamsMultipleDegradations verifies multiple degradations work together.
+func TestFetchParamsMultipleDegradations(t *testing.T) {
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainIDErr:     errMock("chain id unavailable"),
+			nonce:          5,
+			gasTipCapErr:   errMock("tip cap unavailable"),
+			headerErr:      errMock("header unavailable"),
+			gasEstimateErr: errMock("gas estimation failed"),
+		},
+		warnWriter: &warnBuf,
+	}
+
+	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	params, err := ec.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("expected no error with multiple degradations, got: %v", err)
+	}
+
+	if params.ChainID != nil {
+		t.Fatalf("expected nil ChainID, got %s", params.ChainID)
+	}
+	assertBigInt(t, "GasTipCap", params.GasTipCap, big.NewInt(0))
+	assertBigInt(t, "GasFeeCap", params.GasFeeCap, big.NewInt(0))
+	if params.GasLimit != 0 {
+		t.Fatalf("expected gas limit 0, got %d", params.GasLimit)
+	}
+	if params.Nonce != 5 {
+		t.Fatalf("expected nonce 5, got %d", params.Nonce)
+	}
+
+	warnStr := warnBuf.String()
+	warnLines := strings.Count(warnStr, "warning:")
+	if warnLines != 4 {
+		t.Fatalf("expected 4 warnings, got %d: %s", warnLines, warnStr)
+	}
+}
+
+// TestFetchParamsValuePassthrough verifies the value is passed through to TxParams.
+func TestFetchParamsValuePassthrough(t *testing.T) {
 	oneETH := new(big.Int).SetUint64(1_000_000_000_000_000_000)
 
-	mock := &mockBackend{
-		chainID:     big.NewInt(1),
-		nonce:       0,
-		gasTipCap:   big.NewInt(0),
-		baseFee:     big.NewInt(0),
-		gasEstimate: 21000,
+	var warnBuf bytes.Buffer
+	ec := &ethClient{
+		backend: &mockBackend{
+			chainID:     big.NewInt(1),
+			gasTipCap:   big.NewInt(0),
+			baseFee:     big.NewInt(0),
+			gasEstimate: 21000,
+		},
+		warnWriter: &warnBuf,
 	}
 
-	ec := &ethClient{backend: mock}
 	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
@@ -296,6 +466,70 @@ func TestFetchParamsReturnsCorrectValuePassthrough(t *testing.T) {
 	}
 
 	assertBigInt(t, "Value", params.Value, oneETH)
+}
+
+// --- MockClient tests ---
+
+// TestMockClientFetchParams verifies the MockClient works correctly.
+func TestMockClientFetchParams(t *testing.T) {
+	mock := &MockClient{
+		FetchParamsFn: func(_ context.Context, _, _ common.Address, _ []byte, _ *big.Int) (txbuilder.TxParams, error) {
+			return txbuilder.TxParams{
+				ChainID:   big.NewInt(42),
+				Nonce:     10,
+				GasTipCap: big.NewInt(1_000_000_000),
+				GasFeeCap: big.NewInt(20_000_000_000),
+				GasLimit:  50000,
+				Value:     big.NewInt(0),
+			}, nil
+		},
+	}
+
+	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	params, err := mock.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertBigInt(t, "ChainID", params.ChainID, big.NewInt(42))
+	if params.Nonce != 10 {
+		t.Fatalf("expected nonce 10, got %d", params.Nonce)
+	}
+
+	mock.Close()
+}
+
+// TestMockClientDefaultFetchParams verifies MockClient returns zero TxParams when no FetchParamsFn set.
+func TestMockClientDefaultFetchParams(t *testing.T) {
+	mock := &MockClient{}
+
+	from := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	params, err := mock.FetchParams(context.Background(), from, to, nil, big.NewInt(0))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if params.ChainID != nil {
+		t.Fatalf("expected nil ChainID, got %s", params.ChainID)
+	}
+}
+
+// TestMockClientCloseFn verifies MockClient calls CloseFn when set.
+func TestMockClientCloseFn(t *testing.T) {
+	called := false
+	mock := &MockClient{
+		CloseFn: func() { called = true },
+	}
+
+	mock.Close()
+
+	if !called {
+		t.Fatal("expected CloseFn to be called")
+	}
 }
 
 // --- Test helpers ---
