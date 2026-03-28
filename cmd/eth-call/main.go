@@ -210,14 +210,8 @@ func buildApp() *cli.App {
 
 // parseValue converts a decimal or 0x-prefixed hex string to *big.Int.
 func parseValue(s string) (*big.Int, error) {
-	v := new(big.Int)
-	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
-		if _, ok := v.SetString(s[2:], 16); !ok {
-			return nil, fmt.Errorf("invalid --value: %q (expected decimal or 0x-prefixed hex integer)", s)
-		}
-		return v, nil
-	}
-	if _, ok := v.SetString(s, 10); !ok {
+	v, ok := converter.ParseBigInt(s)
+	if !ok {
 		return nil, fmt.Errorf("invalid --value: %q (expected decimal or 0x-prefixed hex integer)", s)
 	}
 	return v, nil

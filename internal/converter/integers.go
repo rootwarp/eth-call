@@ -27,7 +27,7 @@ func convertUint(s string, size int) (interface{}, error) {
 			return n, nil
 		}
 	default:
-		n, ok := parseBigInt(s)
+		n, ok := ParseBigInt(s)
 		if !ok {
 			return nil, fmt.Errorf("invalid uint%d: %q (expected decimal or 0x-prefixed hex integer)", size, s)
 		}
@@ -61,7 +61,7 @@ func convertInt(s string, size int) (interface{}, error) {
 			return n, nil
 		}
 	default:
-		n, ok := parseBigInt(s)
+		n, ok := ParseBigInt(s)
 		if !ok {
 			return nil, fmt.Errorf("invalid int%d: %q (expected decimal or 0x-prefixed hex integer)", size, s)
 		}
@@ -76,8 +76,8 @@ func convertInt(s string, size int) (interface{}, error) {
 	}
 }
 
-// parseBigInt parses a string as a big.Int, auto-detecting hex (0x prefix) or decimal.
-func parseBigInt(s string) (*big.Int, bool) {
+// ParseBigInt parses a string as a big.Int, auto-detecting hex (0x prefix) or decimal.
+func ParseBigInt(s string) (*big.Int, bool) {
 	n := new(big.Int)
 	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 		_, ok := n.SetString(s[2:], 16)

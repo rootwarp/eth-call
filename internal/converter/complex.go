@@ -20,13 +20,8 @@ func convertSlice(s string, elemType ethabi.Type) (interface{}, error) {
 	goType := elemType.GetType()
 	slice := reflect.MakeSlice(reflect.SliceOf(goType), len(elements), len(elements))
 
-	for i, raw := range elements {
-		str := elementToString(raw)
-		converted, err := ConvertArg(str, elemType)
-		if err != nil {
-			return nil, fmt.Errorf("element [%d]: %w", i, err)
-		}
-		slice.Index(i).Set(reflect.ValueOf(converted))
+	if err := convertElements(elements, elemType, slice); err != nil {
+		return nil, err
 	}
 
 	return slice.Interface(), nil
@@ -47,16 +42,24 @@ func convertArray(s string, elemType ethabi.Type, size int) (interface{}, error)
 	goType := elemType.GetType()
 	arr := reflect.New(reflect.ArrayOf(size, goType)).Elem()
 
+	if err := convertElements(elements, elemType, arr); err != nil {
+		return nil, err
+	}
+
+	return arr.Interface(), nil
+}
+
+// convertElements converts and assigns JSON elements into a reflect container (slice or array).
+func convertElements(elements []json.RawMessage, elemType ethabi.Type, container reflect.Value) error {
 	for i, raw := range elements {
 		str := elementToString(raw)
 		converted, err := ConvertArg(str, elemType)
 		if err != nil {
-			return nil, fmt.Errorf("element [%d]: %w", i, err)
+			return fmt.Errorf("element [%d]: %w", i, err)
 		}
-		arr.Index(i).Set(reflect.ValueOf(converted))
+		container.Index(i).Set(reflect.ValueOf(converted))
 	}
-
-	return arr.Interface(), nil
+	return nil
 }
 
 // parseJSONArray decodes a JSON array string into a slice of raw JSON elements.
