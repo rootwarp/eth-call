@@ -33,9 +33,9 @@ func ConvertArg(value string, typ ethabi.Type) (interface{}, error) {
 	case ethabi.StringTy:
 		return value, nil
 	case ethabi.UintTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertUint(value, typ.Size)
 	case ethabi.IntTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertInt(value, typ.Size)
 	case ethabi.BoolTy:
 		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
 	case ethabi.AddressTy:
