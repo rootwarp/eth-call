@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v2"
 )
 
@@ -14,6 +15,22 @@ func buildApp() *cli.App {
 		Usage:     "Generate unsigned Ethereum transactions from ABI",
 		UsageText: "eth-call --abi <path> --to <address> [flags] <method> [args...]",
 		Version:   "0.1.0",
+		Description: `Examples:
+  # ERC-20 transfer
+  eth-call --abi erc20.json --to 0xdAC17F958D2ee523a2206206994597C13D831ec7 transfer 0xRecipient 1000000
+
+  # Query balance (calldata only)
+  eth-call --abi erc20.json --to 0xdAC17F958D2ee523a2206206994597C13D831ec7 --calldata-only balanceOf 0xHolder
+
+  # Uniswap swap with RPC
+  eth-call --abi router.json --to 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D --rpc http://localhost:8545 swapExactTokensForTokens 1000 0 '["0xA","0xB"]' 0xRecipient 9999999999`,
+		Before: func(c *cli.Context) error {
+			addr := c.String("to")
+			if addr != "" && !common.IsHexAddress(addr) {
+				return fmt.Errorf("invalid address: %s (expected 0x-prefixed 40-character hex)", addr)
+			}
+			return nil
+		},
 		Flags: []cli.Flag{
 			&cli.PathFlag{
 				Name:     "abi",

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -60,5 +61,65 @@ func TestBuildApp_ActionReturnsNotImplemented(t *testing.T) {
 	}
 	if err.Error() != "not implemented" {
 		t.Fatalf("expected 'not implemented', got %q", err.Error())
+	}
+}
+
+func TestBuildApp_BeforeHook_ValidAddress(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{"eth-call", "--abi", "test.json", "--to", "0x0000000000000000000000000000000000000000", "transfer"})
+	// Should pass Before hook and reach Action (which returns "not implemented")
+	if err == nil {
+		t.Fatal("expected error from stub action")
+	}
+	if err.Error() != "not implemented" {
+		t.Fatalf("expected 'not implemented' after valid address, got %q", err.Error())
+	}
+}
+
+func TestBuildApp_BeforeHook_InvalidAddress(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{"eth-call", "--abi", "test.json", "--to", "not-an-address", "transfer"})
+	if err == nil {
+		t.Fatal("expected error for invalid address")
+	}
+	expected := "invalid address: not-an-address (expected 0x-prefixed 40-character hex)"
+	if err.Error() != expected {
+		t.Fatalf("expected %q, got %q", expected, err.Error())
+	}
+}
+
+func TestBuildApp_BeforeHook_InvalidAddress_NoPrefixShort(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{"eth-call", "--abi", "test.json", "--to", "0x123", "transfer"})
+	if err == nil {
+		t.Fatal("expected error for short address")
+	}
+	if !strings.Contains(err.Error(), "invalid address: 0x123") {
+		t.Fatalf("expected invalid address error, got %q", err.Error())
+	}
+}
+
+func TestBuildApp_BeforeHook_HelpSkipsValidation(t *testing.T) {
+	app := buildApp()
+	// --help should not trigger address validation
+	err := app.Run([]string{"eth-call", "--help"})
+	if err != nil {
+		t.Fatalf("--help should not return error, got: %v", err)
+	}
+}
+
+func TestBuildApp_Description_HasExamples(t *testing.T) {
+	app := buildApp()
+	if app.Description == "" {
+		t.Fatal("expected non-empty Description with usage examples")
+	}
+	if !strings.Contains(app.Description, "transfer") {
+		t.Error("Description should include transfer example")
+	}
+	if !strings.Contains(app.Description, "balanceOf") {
+		t.Error("Description should include balanceOf example")
+	}
+	if !strings.Contains(app.Description, "--calldata-only") {
+		t.Error("Description should include --calldata-only example")
 	}
 }

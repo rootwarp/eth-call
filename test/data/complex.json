@@ -67,5 +67,64 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "mixedInts",
+    "inputs": [
+      {"name": "a", "type": "uint8"},
+      {"name": "b", "type": "uint32"},
+      {"name": "c", "type": "uint128"},
+      {"name": "d", "type": "uint256"},
+      {"name": "e", "type": "int8"},
+      {"name": "f", "type": "int256"}
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "dynamicBytesArray",
+    "inputs": [
+      {"name": "keys", "type": "bytes32[]"},
+      {"name": "values", "type": "bytes[]"}
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "nestedArrays",
+    "inputs": [
+      {"name": "matrix", "type": "uint256[][]"},
+      {"name": "label", "type": "string"}
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "complexTuple",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "components": [
+          {"name": "amount", "type": "uint256"},
+          {"name": "recipient", "type": "address"},
+          {
+            "name": "metadata",
+            "type": "tuple",
+            "components": [
+              {"name": "active", "type": "bool"},
+              {"name": "tag", "type": "bytes32"}
+            ]
+          },
+          {"name": "values", "type": "uint256[]"}
+        ]
+      }
+    ],
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable"
   }
 ]
