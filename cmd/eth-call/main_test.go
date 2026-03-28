@@ -102,6 +102,188 @@ func TestBuildApp_Description_HasExamples(t *testing.T) {
 	}
 }
 
+// --- Error path tests ---
+
+func TestAction_MissingABIFlag(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{
+		"eth-call",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"transfer",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing --abi flag")
+	}
+	if !strings.Contains(err.Error(), "abi") {
+		t.Fatalf("expected error mentioning 'abi', got %q", err.Error())
+	}
+}
+
+func TestAction_InvalidMethodName(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"nonExistentMethod",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid method name")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected error containing 'not found', got %q", err.Error())
+	}
+	// Should list available methods in the error
+	if !strings.Contains(err.Error(), "transfer") {
+		t.Fatalf("expected error listing available methods (including 'transfer'), got %q", err.Error())
+	}
+}
+
+func TestAction_WrongArgumentCount(t *testing.T) {
+	app := buildApp()
+	// transfer(address,uint256) expects 2 args, provide only 1
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong argument count")
+	}
+	if !strings.Contains(err.Error(), "expected 2") {
+		t.Fatalf("expected error mentioning 'expected 2', got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "got 1") {
+		t.Fatalf("expected error mentioning 'got 1', got %q", err.Error())
+	}
+}
+
+func TestAction_WrongArgumentCount_TooMany(t *testing.T) {
+	app := buildApp()
+	// transfer(address,uint256) expects 2 args, provide 3
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"1000",
+		"extra-arg",
+	})
+	if err == nil {
+		t.Fatal("expected error for too many arguments")
+	}
+	if !strings.Contains(err.Error(), "expected 2") {
+		t.Fatalf("expected error mentioning 'expected 2', got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "got 3") {
+		t.Fatalf("expected error mentioning 'got 3', got %q", err.Error())
+	}
+}
+
+func TestAction_InvalidABIFile(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/invalid.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"transfer",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid ABI file")
+	}
+	if !strings.Contains(err.Error(), "abi") {
+		t.Fatalf("expected error mentioning 'abi', got %q", err.Error())
+	}
+}
+
+func TestAction_NonexistentABIFile(t *testing.T) {
+	app := buildApp()
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "nonexistent-file.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"transfer",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent ABI file")
+	}
+	if !strings.Contains(err.Error(), "abi") {
+		t.Fatalf("expected error mentioning 'abi', got %q", err.Error())
+	}
+}
+
+func TestAction_CalldataOnly_BalanceOf(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--calldata-only",
+		"balanceOf",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	// balanceOf(address) selector = 0x70a08231
+	if !strings.HasPrefix(output, "0x70a08231") {
+		t.Fatalf("expected calldata starting with balanceOf selector 0x70a08231, got %q", output)
+	}
+}
+
+func TestAction_Approve(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"approve",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"5000",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "0x02") {
+		t.Fatalf("expected output starting with 0x02, got %q", output)
+	}
+}
+
+func TestAction_NoMethodListsMethods_ContainsMultiple(t *testing.T) {
+	app := buildApp()
+	var stderr bytes.Buffer
+	app.ErrWriter = &stderr
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stderr.String()
+	for _, method := range []string{"transfer", "approve", "balanceOf", "totalSupply"} {
+		if !strings.Contains(output, method) {
+			t.Errorf("expected method listing to contain %q, got %q", method, output)
+		}
+	}
+}
+
 // --- Pipeline integration tests ---
 
 func TestAction_ERC20Transfer(t *testing.T) {
