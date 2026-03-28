@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -46,7 +47,7 @@ func TestBuildApp_HasRequiredFlags(t *testing.T) {
 		}
 	}
 
-	required := []string{"abi", "to", "chain-id", "value", "calldata-only", "rpc", "from"}
+	required := []string{"abi", "to", "chain-id", "value", "calldata-only", "rpc", "from", "json"}
 	for _, name := range required {
 		if !flagNames[name] {
 			t.Errorf("missing flag: --%s", name)
@@ -880,5 +881,237 @@ func TestAction_RPCCalldataOnlySkipsRPC(t *testing.T) {
 	}
 	if dialCalled {
 		t.Fatal("expected RPC dial to be skipped in --calldata-only mode")
+	}
+}
+
+// --- DEV-23: --json structured output tests ---
+
+func TestAction_JSON_OutputIsValidJSON(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--json",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"1000",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput: %s", err, stdout.String())
+	}
+}
+
+func TestAction_JSON_HasExpectedFields(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--json",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"1000",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+
+	requiredFields := []string{
+		"type", "chainId", "nonce", "to", "value",
+		"gas", "maxFeePerGas", "maxPriorityFeePerGas", "data", "raw",
+	}
+	for _, field := range requiredFields {
+		if _, ok := result[field]; !ok {
+			t.Errorf("missing required field %q in JSON output", field)
+		}
+	}
+}
+
+func TestAction_JSON_FieldValues(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--chain-id", "137",
+		"--value", "1000",
+		"--json",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"500",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+
+	// type should be EIP-1559
+	if result["type"] != "0x2" {
+		t.Errorf("expected type 0x2, got %v", result["type"])
+	}
+	// chainId = 137 = 0x89
+	if result["chainId"] != "0x89" {
+		t.Errorf("expected chainId 0x89, got %v", result["chainId"])
+	}
+	// to address (checksummed)
+	to, ok := result["to"].(string)
+	if !ok || !strings.EqualFold(to, "0x1234567890123456789012345678901234567890") {
+		t.Errorf("expected to address 0x1234...7890, got %v", result["to"])
+	}
+	// value = 1000 = 0x3e8
+	if result["value"] != "0x3e8" {
+		t.Errorf("expected value 0x3e8, got %v", result["value"])
+	}
+	// data should start with transfer selector 0xa9059cbb
+	data, ok := result["data"].(string)
+	if !ok || !strings.HasPrefix(data, "0xa9059cbb") {
+		t.Errorf("expected data starting with 0xa9059cbb, got %v", result["data"])
+	}
+	// raw should start with 0x02 (DynamicFeeTx type prefix)
+	raw, ok := result["raw"].(string)
+	if !ok || !strings.HasPrefix(raw, "0x02") {
+		t.Errorf("expected raw starting with 0x02, got %v", result["raw"])
+	}
+}
+
+func TestAction_JSON_WithRPC(t *testing.T) {
+	origDialFn := dialFn
+	defer func() { dialFn = origDialFn }()
+
+	dialFn = func(_ context.Context, _ string) (rpc.Client, error) {
+		return &rpc.MockClient{
+			FetchParamsFn: func(_ context.Context, _, _ common.Address, _ []byte, _ *big.Int) (txbuilder.TxParams, error) {
+				return txbuilder.TxParams{
+					ChainID:   big.NewInt(42),
+					Nonce:     7,
+					GasTipCap: big.NewInt(1_000_000_000),
+					GasFeeCap: big.NewInt(20_000_000_000),
+					GasLimit:  60000,
+					Value:     big.NewInt(0),
+				}, nil
+			},
+		}, nil
+	}
+
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--from", "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"--rpc", "http://localhost:8545",
+		"--json",
+		"transfer",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"1000",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+
+	// nonce = 7
+	if result["nonce"] != "0x7" {
+		t.Errorf("expected nonce 0x7, got %v", result["nonce"])
+	}
+	// gas = 60000 = 0xea60
+	if result["gas"] != "0xea60" {
+		t.Errorf("expected gas 0xea60, got %v", result["gas"])
+	}
+	// maxPriorityFeePerGas = 1000000000 = 0x3b9aca00
+	if result["maxPriorityFeePerGas"] != "0x3b9aca00" {
+		t.Errorf("expected maxPriorityFeePerGas 0x3b9aca00, got %v", result["maxPriorityFeePerGas"])
+	}
+	// maxFeePerGas = 20000000000 = 0x4a817c800
+	if result["maxFeePerGas"] != "0x4a817c800" {
+		t.Errorf("expected maxFeePerGas 0x4a817c800, got %v", result["maxFeePerGas"])
+	}
+}
+
+func TestAction_JSON_IsPrettyPrinted(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--json",
+		"totalSupply",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stdout.String()
+	// Pretty-printed JSON should contain newlines and indentation
+	if !strings.Contains(output, "\n") {
+		t.Fatal("expected pretty-printed JSON with newlines")
+	}
+	if !strings.Contains(output, "  ") {
+		t.Fatal("expected pretty-printed JSON with indentation")
+	}
+}
+
+func TestAction_CalldataOnly_TakesPrecedenceOverJSON(t *testing.T) {
+	app := buildApp()
+	var stdout bytes.Buffer
+	app.Writer = &stdout
+
+	// --calldata-only should take precedence over --json
+	err := app.Run([]string{
+		"eth-call",
+		"--abi", "../../test/data/erc20.json",
+		"--to", "0x1234567890123456789012345678901234567890",
+		"--calldata-only",
+		"--json",
+		"balanceOf",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	// Should be raw calldata, not JSON
+	if !strings.HasPrefix(output, "0x70a08231") {
+		t.Fatalf("expected calldata starting with 0x70a08231, got %q", output)
+	}
+	// Should NOT be JSON
+	var result map[string]interface{}
+	if json.Unmarshal([]byte(output), &result) == nil {
+		t.Fatal("expected non-JSON output when --calldata-only is set")
 	}
 }

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/urfave/cli/v2"
 
 	internalabi "github.com/rootwarp/eth-call/internal/abi"
@@ -75,6 +77,10 @@ func buildApp() *cli.App {
 			&cli.BoolFlag{
 				Name:  "calldata-only",
 				Usage: "output only the ABI-encoded calldata",
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "output transaction fields as pretty-printed JSON",
 			},
 			&cli.StringFlag{
 				Name:  "from",
@@ -178,6 +184,19 @@ func buildApp() *cli.App {
 			}
 
 			// 10. Build transaction
+			if c.Bool("json") {
+				tx, buildErr := txbuilder.BuildTx(calldata, toAddr, params)
+				if buildErr != nil {
+					return buildErr
+				}
+				jsonOut, fmtErr := formatTxJSON(tx)
+				if fmtErr != nil {
+					return fmtErr
+				}
+				_, _ = fmt.Fprintln(c.App.Writer, jsonOut)
+				return nil
+			}
+
 			txHex, err := txbuilder.Build(calldata, toAddr, params)
 			if err != nil {
 				return err
@@ -217,6 +236,56 @@ func mergeParams(c *cli.Context, rpcParams txbuilder.TxParams, cliValue *big.Int
 	}
 
 	return params
+}
+
+// txJSON is the structured output format for --json mode.
+type txJSON struct {
+	Type                 string `json:"type"`
+	ChainID              string `json:"chainId"`
+	Nonce                string `json:"nonce"`
+	To                   string `json:"to"`
+	Value                string `json:"value"`
+	Gas                  string `json:"gas"`
+	MaxFeePerGas         string `json:"maxFeePerGas"`
+	MaxPriorityFeePerGas string `json:"maxPriorityFeePerGas"`
+	Data                 string `json:"data"`
+	Raw                  string `json:"raw"`
+}
+
+// formatTxJSON formats a transaction as pretty-printed JSON with hex-encoded fields.
+func formatTxJSON(tx *types.Transaction) (string, error) {
+	raw, err := tx.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize transaction: %w", err)
+	}
+
+	out := txJSON{
+		Type:                 fmt.Sprintf("0x%x", tx.Type()),
+		ChainID:              bigToHex(tx.ChainId()),
+		Nonce:                fmt.Sprintf("0x%x", tx.Nonce()),
+		To:                   strings.ToLower(tx.To().Hex()),
+		Value:                bigToHex(tx.Value()),
+		Gas:                  fmt.Sprintf("0x%x", tx.Gas()),
+		MaxFeePerGas:         bigToHex(tx.GasFeeCap()),
+		MaxPriorityFeePerGas: bigToHex(tx.GasTipCap()),
+		Data:                 fmt.Sprintf("0x%x", tx.Data()),
+		Raw:                  fmt.Sprintf("0x%x", raw),
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	return string(b), nil
+}
+
+// bigToHex converts a *big.Int to a 0x-prefixed hex string.
+func bigToHex(n *big.Int) string {
+	if n == nil || n.Sign() == 0 {
+		return "0x0"
+	}
+	return fmt.Sprintf("0x%x", n)
 }
 
 func main() {
