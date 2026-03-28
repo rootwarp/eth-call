@@ -54,9 +54,9 @@ func ConvertArg(value string, typ ethabi.Type) (interface{}, error) {
 	case ethabi.FixedBytesTy:
 		return convertFixedBytes(value, typ.Size)
 	case ethabi.SliceTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertSlice(value, *typ.Elem)
 	case ethabi.ArrayTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertArray(value, *typ.Elem, typ.Size)
 	case ethabi.TupleTy:
 		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
 	default:

@@ -138,8 +138,6 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 		name string
 		typ  byte
 	}{
-		{"SliceTy", ethabi.SliceTy},
-		{"ArrayTy", ethabi.ArrayTy},
 		{"TupleTy", ethabi.TupleTy},
 	}
 	for _, tt := range tests {
@@ -153,6 +151,235 @@ func TestConvertArg_NotImplementedTypes(t *testing.T) {
 				t.Fatalf("expected 'not implemented' error for %s, got %q", tt.name, err.Error())
 			}
 		})
+	}
+}
+
+// --- Slice (dynamic array) tests ---
+
+// makeSliceType builds an ethabi.Type for T[] where T is described by elemType.
+func makeSliceType(elemType ethabi.Type) ethabi.Type {
+	return ethabi.Type{T: ethabi.SliceTy, Elem: &elemType}
+}
+
+// makeArrayType builds an ethabi.Type for T[N].
+func makeArrayType(elemType ethabi.Type, size int) ethabi.Type {
+	return ethabi.Type{T: ethabi.ArrayTy, Elem: &elemType, Size: size}
+}
+
+func TestConvertArg_Uint256Slice(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 256)
+	typ := makeSliceType(elem)
+
+	t.Run("basic", func(t *testing.T) {
+		result, err := ConvertArg("[1,2,3]", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		slice, ok := result.([]*big.Int)
+		if !ok {
+			t.Fatalf("expected []*big.Int, got %T", result)
+		}
+		if len(slice) != 3 {
+			t.Fatalf("expected 3 elements, got %d", len(slice))
+		}
+		for i, want := range []int64{1, 2, 3} {
+			if slice[i].Cmp(big.NewInt(want)) != 0 {
+				t.Fatalf("element %d: expected %d, got %s", i, want, slice[i].String())
+			}
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		result, err := ConvertArg("[]", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		slice, ok := result.([]*big.Int)
+		if !ok {
+			t.Fatalf("expected []*big.Int, got %T", result)
+		}
+		if len(slice) != 0 {
+			t.Fatalf("expected 0 elements, got %d", len(slice))
+		}
+	})
+
+	t.Run("single", func(t *testing.T) {
+		result, err := ConvertArg("[42]", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		slice, ok := result.([]*big.Int)
+		if !ok {
+			t.Fatalf("expected []*big.Int, got %T", result)
+		}
+		if len(slice) != 1 || slice[0].Cmp(big.NewInt(42)) != 0 {
+			t.Fatalf("expected [42], got %v", slice)
+		}
+	})
+
+	t.Run("invalid_json", func(t *testing.T) {
+		_, err := ConvertArg("not json", typ)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON, got nil")
+		}
+	})
+}
+
+func TestConvertArg_AddressSlice(t *testing.T) {
+	elem := makeType(ethabi.AddressTy)
+	typ := makeSliceType(elem)
+
+	result, err := ConvertArg(`["0xdAC17F958D2ee523a2206206994597C13D831ec7","0x0000000000000000000000000000000000000001"]`, typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	slice, ok := result.([]common.Address)
+	if !ok {
+		t.Fatalf("expected []common.Address, got %T", result)
+	}
+	if len(slice) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(slice))
+	}
+	want0 := common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+	if slice[0] != want0 {
+		t.Fatalf("element 0: expected %s, got %s", want0.Hex(), slice[0].Hex())
+	}
+}
+
+func TestConvertArg_BoolSlice(t *testing.T) {
+	elem := makeType(ethabi.BoolTy)
+	typ := makeSliceType(elem)
+
+	result, err := ConvertArg("[true,false,true]", typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	slice, ok := result.([]bool)
+	if !ok {
+		t.Fatalf("expected []bool, got %T", result)
+	}
+	if len(slice) != 3 || slice[0] != true || slice[1] != false || slice[2] != true {
+		t.Fatalf("expected [true,false,true], got %v", slice)
+	}
+}
+
+func TestConvertArg_StringSlice(t *testing.T) {
+	elem := makeType(ethabi.StringTy)
+	typ := makeSliceType(elem)
+
+	result, err := ConvertArg(`["hello","world"]`, typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	slice, ok := result.([]string)
+	if !ok {
+		t.Fatalf("expected []string, got %T", result)
+	}
+	if len(slice) != 2 || slice[0] != "hello" || slice[1] != "world" {
+		t.Fatalf("expected [hello,world], got %v", slice)
+	}
+}
+
+func TestConvertArg_SliceElementError(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 8)
+	typ := makeSliceType(elem)
+
+	_, err := ConvertArg(`[1,256,3]`, typ)
+	if err == nil {
+		t.Fatal("expected error for element overflow, got nil")
+	}
+	if !strings.Contains(err.Error(), "element [1]") {
+		t.Fatalf("expected error identifying element index, got %q", err.Error())
+	}
+}
+
+// --- Fixed array tests ---
+
+func TestConvertArg_Uint256Array2(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 256)
+	typ := makeArrayType(elem, 2)
+
+	t.Run("valid", func(t *testing.T) {
+		result, err := ConvertArg("[1,2]", typ)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		arr, ok := result.([2]*big.Int)
+		if !ok {
+			t.Fatalf("expected [2]*big.Int, got %T", result)
+		}
+		if arr[0].Cmp(big.NewInt(1)) != 0 || arr[1].Cmp(big.NewInt(2)) != 0 {
+			t.Fatalf("expected [1,2], got [%s,%s]", arr[0], arr[1])
+		}
+	})
+
+	t.Run("length_mismatch", func(t *testing.T) {
+		_, err := ConvertArg("[1,2,3]", typ)
+		if err == nil {
+			t.Fatal("expected error for length mismatch, got nil")
+		}
+		if !strings.Contains(err.Error(), "length mismatch") {
+			t.Fatalf("expected length mismatch error, got %q", err.Error())
+		}
+	})
+}
+
+func TestConvertArg_FixedArrayInvalidJSON(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 256)
+	typ := makeArrayType(elem, 2)
+
+	_, err := ConvertArg("not json", typ)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestConvertArg_FixedArrayElementError(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 8)
+	typ := makeArrayType(elem, 2)
+
+	_, err := ConvertArg("[1,999]", typ)
+	if err == nil {
+		t.Fatal("expected error for element overflow, got nil")
+	}
+	if !strings.Contains(err.Error(), "element [1]") {
+		t.Fatalf("expected error identifying element index, got %q", err.Error())
+	}
+}
+
+func TestConvertArg_Uint8Array(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 8)
+	typ := makeArrayType(elem, 3)
+
+	result, err := ConvertArg("[10,20,30]", typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr, ok := result.([3]uint8)
+	if !ok {
+		t.Fatalf("expected [3]uint8, got %T", result)
+	}
+	if arr[0] != 10 || arr[1] != 20 || arr[2] != 30 {
+		t.Fatalf("expected [10,20,30], got %v", arr)
+	}
+}
+
+func TestConvertArg_Uint256LargeNumbersSlice(t *testing.T) {
+	elem := makeIntType(ethabi.UintTy, 256)
+	typ := makeSliceType(elem)
+
+	maxUint256 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	input := "[" + maxUint256.String() + "]"
+	result, err := ConvertArg(input, typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	slice, ok := result.([]*big.Int)
+	if !ok {
+		t.Fatalf("expected []*big.Int, got %T", result)
+	}
+	if len(slice) != 1 || slice[0].Cmp(maxUint256) != 0 {
+		t.Fatalf("expected [%s], got %v", maxUint256.String(), slice)
 	}
 }
 
