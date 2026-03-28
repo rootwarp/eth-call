@@ -72,6 +72,49 @@ func parseJSONArray(s string) ([]json.RawMessage, error) {
 	return elements, nil
 }
 
+// convertTuple converts a JSON object string to a dynamic Go struct matching
+// the ABI tuple type. Uses json.Decoder.UseNumber() to prevent float64 precision loss.
+// Field names are matched using go-ethereum's ToCamelCase convention.
+func convertTuple(s string, typ ethabi.Type) (interface{}, error) {
+	// Parse JSON object into map of raw messages.
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+
+	var fields map[string]json.RawMessage
+	if err := dec.Decode(&fields); err != nil {
+		return nil, fmt.Errorf("invalid tuple: %w", err)
+	}
+
+	// Create a new struct instance using the ABI-defined type.
+	structValue := reflect.New(typ.TupleType).Elem()
+
+	for i, elem := range typ.TupleElems {
+		rawName := typ.TupleRawNames[i]
+		fieldName := ethabi.ToCamelCase(rawName)
+
+		raw, ok := fields[rawName]
+		if !ok {
+			return nil, fmt.Errorf("tuple field %q missing (expected fields: %s)",
+				rawName, strings.Join(typ.TupleRawNames, ", "))
+		}
+
+		// Convert the raw JSON value to a string for ConvertArg.
+		str := elementToString(raw)
+		converted, err := ConvertArg(str, *elem)
+		if err != nil {
+			return nil, fmt.Errorf("tuple field %q: %w", rawName, err)
+		}
+
+		field := structValue.FieldByName(fieldName)
+		if !field.IsValid() {
+			return nil, fmt.Errorf("tuple field %q: struct field %q not found", rawName, fieldName)
+		}
+		field.Set(reflect.ValueOf(converted))
+	}
+
+	return structValue.Interface(), nil
+}
+
 // elementToString converts a raw JSON element to its string representation
 // suitable for passing to ConvertArg.
 func elementToString(raw json.RawMessage) string {

@@ -2,6 +2,7 @@ package converter
 
 import (
 	"math/big"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -133,24 +134,196 @@ func TestConvertArgs_ZeroArgs(t *testing.T) {
 	}
 }
 
-func TestConvertArg_NotImplementedTypes(t *testing.T) {
-	tests := []struct {
-		name string
-		typ  byte
-	}{
-		{"TupleTy", ethabi.TupleTy},
+// --- Tuple tests ---
+
+// makeTupleType builds a tuple ethabi.Type using NewType.
+func makeTupleType(t *testing.T, components []ethabi.ArgumentMarshaling) ethabi.Type {
+	t.Helper()
+	typ, err := ethabi.NewType("tuple", "", components)
+	if err != nil {
+		t.Fatalf("failed to create tuple type: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			typ := makeType(tt.typ)
-			_, err := ConvertArg("test", typ)
-			if err == nil {
-				t.Fatalf("expected error for %s, got nil", tt.name)
-			}
-			if !strings.Contains(err.Error(), "not implemented") {
-				t.Fatalf("expected 'not implemented' error for %s, got %q", tt.name, err.Error())
-			}
-		})
+	return typ
+}
+
+func TestConvertArg_SimpleTuple(t *testing.T) {
+	typ := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "amount", Type: "uint256"},
+		{Name: "recipient", Type: "address"},
+	})
+
+	result, err := ConvertArg(`{"amount":"100","recipient":"0xdAC17F958D2ee523a2206206994597C13D831ec7"}`, typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify it's a struct with correct fields via reflection.
+	v := reflect.ValueOf(result)
+	if v.Kind() != reflect.Struct {
+		t.Fatalf("expected struct, got %s", v.Kind())
+	}
+
+	amountField := v.FieldByName("Amount")
+	if !amountField.IsValid() {
+		t.Fatal("expected field Amount in struct")
+	}
+	amount, ok := amountField.Interface().(*big.Int)
+	if !ok {
+		t.Fatalf("expected *big.Int for Amount, got %T", amountField.Interface())
+	}
+	if amount.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("expected Amount=100, got %s", amount.String())
+	}
+
+	recipientField := v.FieldByName("Recipient")
+	if !recipientField.IsValid() {
+		t.Fatal("expected field Recipient in struct")
+	}
+	addr, ok := recipientField.Interface().(common.Address)
+	if !ok {
+		t.Fatalf("expected common.Address for Recipient, got %T", recipientField.Interface())
+	}
+	want := common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+	if addr != want {
+		t.Fatalf("expected Recipient=%s, got %s", want.Hex(), addr.Hex())
+	}
+}
+
+func TestConvertArg_TupleMissingField(t *testing.T) {
+	typ := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "amount", Type: "uint256"},
+		{Name: "recipient", Type: "address"},
+	})
+
+	_, err := ConvertArg(`{"amount":"100"}`, typ)
+	if err == nil {
+		t.Fatal("expected error for missing field, got nil")
+	}
+	if !strings.Contains(err.Error(), "recipient") && !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected error mentioning missing field, got %q", err.Error())
+	}
+}
+
+func TestConvertArg_NestedTuple(t *testing.T) {
+	typ := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "value", Type: "uint256"},
+		{Name: "inner", Type: "tuple", Components: []ethabi.ArgumentMarshaling{
+			{Name: "addr", Type: "address"},
+			{Name: "flag", Type: "bool"},
+		}},
+	})
+
+	input := `{"value":"42","inner":{"addr":"0xdAC17F958D2ee523a2206206994597C13D831ec7","flag":"true"}}`
+	result, err := ConvertArg(input, typ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	v := reflect.ValueOf(result)
+	valueField := v.FieldByName("Value")
+	if !valueField.IsValid() {
+		t.Fatal("expected field Value")
+	}
+	val, ok := valueField.Interface().(*big.Int)
+	if !ok {
+		t.Fatalf("expected *big.Int, got %T", valueField.Interface())
+	}
+	if val.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("expected Value=42, got %s", val.String())
+	}
+
+	innerField := v.FieldByName("Inner")
+	if !innerField.IsValid() {
+		t.Fatal("expected field Inner")
+	}
+	if innerField.Kind() != reflect.Struct {
+		t.Fatalf("expected Inner to be struct, got %s", innerField.Kind())
+	}
+
+	addrField := innerField.FieldByName("Addr")
+	if !addrField.IsValid() {
+		t.Fatal("expected field Addr in Inner")
+	}
+	addr, ok := addrField.Interface().(common.Address)
+	if !ok {
+		t.Fatalf("expected common.Address, got %T", addrField.Interface())
+	}
+	wantAddr := common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+	if addr != wantAddr {
+		t.Fatalf("expected addr=%s, got %s", wantAddr.Hex(), addr.Hex())
+	}
+
+	flagField := innerField.FieldByName("Flag")
+	if !flagField.IsValid() {
+		t.Fatal("expected field Flag in Inner")
+	}
+	if flagField.Bool() != true {
+		t.Fatal("expected Flag=true")
+	}
+}
+
+func TestConvertArg_ArrayOfTuples(t *testing.T) {
+	tupleType := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "to", Type: "address"},
+		{Name: "amount", Type: "uint256"},
+	})
+	sliceType := makeSliceType(tupleType)
+
+	input := `[{"to":"0xdAC17F958D2ee523a2206206994597C13D831ec7","amount":"100"},{"to":"0x0000000000000000000000000000000000000001","amount":"200"}]`
+	result, err := ConvertArg(input, sliceType)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	v := reflect.ValueOf(result)
+	if v.Kind() != reflect.Slice {
+		t.Fatalf("expected slice, got %s", v.Kind())
+	}
+	if v.Len() != 2 {
+		t.Fatalf("expected 2 elements, got %d", v.Len())
+	}
+
+	elem0 := v.Index(0)
+	amount0, ok := elem0.FieldByName("Amount").Interface().(*big.Int)
+	if !ok {
+		t.Fatalf("expected *big.Int, got %T", elem0.FieldByName("Amount").Interface())
+	}
+	if amount0.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("expected element[0].Amount=100, got %s", amount0.String())
+	}
+
+	elem1 := v.Index(1)
+	amount1, ok := elem1.FieldByName("Amount").Interface().(*big.Int)
+	if !ok {
+		t.Fatalf("expected *big.Int, got %T", elem1.FieldByName("Amount").Interface())
+	}
+	if amount1.Cmp(big.NewInt(200)) != 0 {
+		t.Fatalf("expected element[1].Amount=200, got %s", amount1.String())
+	}
+}
+
+func TestConvertArg_TupleInvalidJSON(t *testing.T) {
+	typ := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "value", Type: "uint256"},
+	})
+
+	_, err := ConvertArg("not json", typ)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestConvertArg_TupleFieldConversionError(t *testing.T) {
+	typ := makeTupleType(t, []ethabi.ArgumentMarshaling{
+		{Name: "value", Type: "uint8"},
+	})
+
+	_, err := ConvertArg(`{"value":"999"}`, typ)
+	if err == nil {
+		t.Fatal("expected error for field conversion failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "value") {
+		t.Fatalf("expected error mentioning field name, got %q", err.Error())
 	}
 }
 

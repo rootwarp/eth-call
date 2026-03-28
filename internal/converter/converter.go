@@ -58,7 +58,7 @@ func ConvertArg(value string, typ ethabi.Type) (interface{}, error) {
 	case ethabi.ArrayTy:
 		return convertArray(value, *typ.Elem, typ.Size)
 	case ethabi.TupleTy:
-		return nil, fmt.Errorf("converter: %s not implemented", typ.String())
+		return convertTuple(value, typ)
 	default:
 		return nil, fmt.Errorf("converter: unsupported type: %s", typ.String())
 	}
