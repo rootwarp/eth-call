@@ -1,0 +1,32 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - typecheck
+    - gofmt
+    - goimports
+    - errorlint
+    - gosec
+    - revive
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  govet:
+    enable-all: true
+  staticcheck:
+    checks: ["all"]
+  goimports:
+    local-prefixes: github.com/rootwarp/eth-call
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
